@@ -257,6 +257,18 @@ gst_rtp_gst_pay_change_state (GstElement * element, GstStateChange transition)
   return ret;
 }
 
+static gboolean
+set_timestamp (GstBuffer **buffer, guint idx, gpointer user_data)
+{
+  GstClockTime timestamp = *((GstClockTime *) user_data);
+
+  if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_TIMESTAMP (*buffer)))
+    return FALSE;
+
+  GST_BUFFER_TIMESTAMP (*buffer) = timestamp;
+  return TRUE;
+}
+
 #define RTP_HEADER_LEN 12
 
 static gboolean
@@ -271,8 +283,18 @@ gst_rtp_gst_pay_create_from_adapter (GstRtpGSTPay * rtpgstpay,
   if (avail == 0)
     return FALSE;
 
-  mtu = GST_RTP_BASE_PAYLOAD_MTU (rtpgstpay);
+  if (GST_CLOCK_TIME_IS_VALID (timestamp)) {
+    GList *pending = g_list_last (rtpgstpay->pending_buffers);
+    while (pending) {
+      GstBufferList *list = pending->data;
+      if (gst_buffer_list_foreach (list, set_timestamp, &timestamp))
+        pending = g_list_previous (pending);
+      else
+        pending = NULL;
+    }
+  }
 
+  mtu = GST_RTP_BASE_PAYLOAD_MTU (rtpgstpay);
   list = gst_buffer_list_new_sized ((avail / (mtu - (RTP_HEADER_LEN + 8))) + 1);
   frag_offset = 0;
 
@@ -557,13 +579,9 @@ gst_rtp_gst_pay_sink_event (GstRTPBasePayload * payload, GstEvent * event)
   if (etype) {
     GST_DEBUG_OBJECT (rtpgstpay, "make event type %d for %s",
         etype, GST_EVENT_TYPE_NAME (event));
+    /* Do not flush events immediately, wait until a buffer appears and give
+     * the events the same timestamp as the buffer */
     gst_rtp_gst_pay_send_event (rtpgstpay, etype, event);
-    /* Do not send stream-start right away since caps/new-segment were not yet
-       sent, so our data would be considered invalid */
-    if (etype != 4) {
-      /* flush the adapter immediately */
-      gst_rtp_gst_pay_flush (rtpgstpay, GST_CLOCK_TIME_NONE);
-    }
   }
 
   gst_event_unref (event);
