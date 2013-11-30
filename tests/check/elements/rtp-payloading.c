@@ -918,6 +918,21 @@ GST_START_TEST (rtp_g729)
 
 GST_END_TEST;
 
+static const guint8 rtp_dummy_frame_data[] =
+    { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06 };
+
+static int rtp_dummy_frame_data_size = sizeof (rtp_dummy_frame_data);
+static int rtp_dummy_frame_count = 1;
+
+GST_START_TEST (rtp_gst)
+{
+  rtp_pipeline_test (rtp_dummy_frame_data, rtp_dummy_frame_data_size,
+      rtp_dummy_frame_count, "application/x-raw", "rtpgstpay",
+      "rtpgstdepay", 0, 0, FALSE);
+}
+
+GST_END_TEST;
+
 /*
  * Creates the test suite.
  *
@@ -964,6 +979,7 @@ rtp_payloading_suite (void)
   tcase_add_test (tc_chain, rtp_jpeg_list_height_greater_than_2040);
   tcase_add_test (tc_chain, rtp_jpeg_list_width_and_height_greater_than_2040);
   tcase_add_test (tc_chain, rtp_g729);
+  tcase_add_test (tc_chain, rtp_gst);
   return s;
 }
 
