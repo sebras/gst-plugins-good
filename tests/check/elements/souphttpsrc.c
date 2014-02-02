@@ -486,7 +486,7 @@ souphttpsrc_suite (void)
 
   suite_add_tcase (s, tc_internet);
   tcase_set_timeout (tc_internet, 250);
-  tcase_add_test (tc_internet, test_icy_stream);
+  tcase_skip_broken_test (tc_internet, test_icy_stream);
 
   return s;
 }
