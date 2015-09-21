@@ -296,8 +296,8 @@ join_session (GstElement * pipeline, GstElement * rtpBin, SessionData * session)
 
   basePort = 5000 + (session->sessionNum * 6);
 
-  rtpSrc = gst_element_factory_make ("udpsrc", NULL);
-  rtcpSrc = gst_element_factory_make ("udpsrc", NULL);
+  rtpSrc = gst_element_factory_make ("udpsrc", "rtpsrc");
+  rtcpSrc = gst_element_factory_make ("udpsrc", "rtcpsrc");
   rtcpSink = gst_element_factory_make ("udpsink", NULL);
   g_object_set (rtpSrc, "port", basePort, "caps", session->caps, NULL);
   g_object_set (rtcpSink, "port", basePort + 5, "host", "127.0.0.1", "sync",
@@ -322,6 +322,7 @@ join_session (GstElement * pipeline, GstElement * rtpBin, SessionData * session)
       (GClosureNotify) session_unref, 0);
 
   padName = g_strdup_printf ("recv_rtp_sink_%u", session->sessionNum);
+
   gst_element_link_pads (rtpSrc, "src", rtpBin, padName);
   g_free (padName);
 
@@ -334,6 +335,42 @@ join_session (GstElement * pipeline, GstElement * rtpBin, SessionData * session)
   g_free (padName);
 
   session_unref (session);
+}
+
+static void
+send_eos_on_session (GstElement * rtpbin, const gchar * srcname, gint session)
+{
+  GstElement *pipe = GST_ELEMENT (gst_element_get_parent (rtpbin));
+  GstElement *src = gst_bin_get_by_name (GST_BIN (pipe), srcname);
+  GstEvent *eos = gst_event_new_eos ();
+  g_print ("Sending EOS on session %d\n", session);
+  gst_element_send_event (src, eos);
+  gst_object_unref (src);
+  gst_object_unref (pipe);
+}
+
+static void
+cb_bye_timeout (GstElement * rtpbin, gint session, gint ssrc,
+    gpointer user_data)
+{
+  gchar *name = gst_element_get_name (rtpbin);
+  g_print ("%s: session %d bye timeout user_data=%p\n", name, session,
+      user_data);
+  g_free (name);
+
+  send_eos_on_session (rtpbin, "rtpsrc", session);
+  send_eos_on_session (rtpbin, "rtcpsrc", session);
+}
+
+static void
+cb_bye_ssrc (GstElement * rtpbin, gint session, gint ssrc, gpointer user_data)
+{
+  gchar *name = gst_element_get_name (rtpbin);
+  g_print ("%s: session %d bye user_data=%p\n", name, session, user_data);
+  g_free (name);
+
+  send_eos_on_session (rtpbin, "rtpsrc", session);
+  send_eos_on_session (rtpbin, "rtcpsrc", session);
 }
 
 int
@@ -359,6 +396,10 @@ main (int argc, char **argv)
   gst_object_unref (bus);
 
   rtpBin = gst_element_factory_make ("rtpbin", NULL);
+  g_signal_connect (rtpBin, "on-bye-timeout", G_CALLBACK (cb_bye_timeout),
+      (gpointer) 0x12345678);
+  g_signal_connect (rtpBin, "on-bye-ssrc", G_CALLBACK (cb_bye_ssrc),
+      (gpointer) 0x987654321);
   gst_bin_add (GST_BIN (pipe), rtpBin);
   g_object_set (rtpBin, "latency", 200, "do-retransmission", TRUE,
       "rtp-profile", GST_RTP_PROFILE_AVPF, NULL);
@@ -381,6 +422,10 @@ main (int argc, char **argv)
   g_signal_handler_disconnect (rtpBin, handler_2);
 
   gst_object_unref (pipe);
+
+  while (g_main_context_iteration (NULL, FALSE)) {
+    g_print ("cleaning up\n");
+  }
   g_main_loop_unref (loop);
 
   return 0;

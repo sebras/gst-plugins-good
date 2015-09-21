@@ -19,6 +19,9 @@
  */
 #include <gst/gst.h>
 #include <gst/rtp/rtp.h>
+#ifdef G_OS_UNIX
+#include <glib-unix.h>
+#endif
 
 /*
  * An RTP server
@@ -55,11 +58,16 @@
  * ports.
  */
 
+GMainLoop *loop = NULL;
+
 typedef struct _SessionData
 {
   int ref;
   guint sessionNum;
   GstElement *input;
+#ifdef G_OS_UNIX
+  guint watch_id;
+#endif
 } SessionData;
 
 static SessionData *
@@ -74,6 +82,10 @@ session_unref (gpointer data)
 {
   SessionData *session = (SessionData *) data;
   if (g_atomic_int_dec_and_test (&session->ref)) {
+#ifdef G_OS_UNIX
+    if (session->watch_id > 0)
+      g_source_remove (session->watch_id);
+#endif
     g_free (session);
   }
 }
@@ -84,6 +96,13 @@ session_new (guint sessionNum)
   SessionData *ret = g_new0 (SessionData, 1);
   ret->sessionNum = sessionNum;
   return session_ref (ret);
+}
+
+static void
+cb_eos (GstBus * bus, GstMessage * message, gpointer data)
+{
+  g_print ("Got EOS\n");
+  g_main_loop_quit (loop);
 }
 
 /*
@@ -115,12 +134,37 @@ setup_ghost (GstElement * src, GstBin * bin)
   gst_object_unref (srcPad);
 }
 
+#ifdef G_OS_UNIX
+static gboolean
+send_eos (gpointer user_data)
+{
+  SessionData *session = (SessionData *) user_data;
+  GstElement *src;
+  GstEvent *eos;
+  gchar *name;
+
+  src = gst_bin_get_by_name (GST_BIN (session->input), "src");
+
+  name = gst_element_get_name (src);
+  g_print ("Sending EOS on %s\n", name);
+  g_free (name);
+
+  eos = gst_event_new_eos ();
+  gst_element_send_event (src, eos);
+
+  gst_object_unref (src);
+
+  session->watch_id = 0;
+  return G_SOURCE_REMOVE;
+}
+#endif
+
 static SessionData *
 make_audio_session (guint sessionNum)
 {
   SessionData *session;
   GstBin *audioBin = GST_BIN (gst_bin_new (NULL));
-  GstElement *audioSrc = gst_element_factory_make ("audiotestsrc", NULL);
+  GstElement *audioSrc = gst_element_factory_make ("audiotestsrc", "src");
   GstElement *encoder = gst_element_factory_make ("alawenc", NULL);
   GstElement *payloader = gst_element_factory_make ("rtppcmapay", NULL);
   g_object_set (audioSrc, "is-live", TRUE, NULL);
@@ -133,6 +177,11 @@ make_audio_session (guint sessionNum)
   session = session_new (sessionNum);
   session->input = GST_ELEMENT (audioBin);
 
+#ifdef G_OS_UNIX
+  session->watch_id =
+      g_unix_signal_add (SIGINT, (GSourceFunc) send_eos, session);
+#endif
+
   return session;
 }
 
@@ -140,7 +189,7 @@ static SessionData *
 make_video_session (guint sessionNum)
 {
   GstBin *videoBin = GST_BIN (gst_bin_new (NULL));
-  GstElement *videoSrc = gst_element_factory_make ("videotestsrc", NULL);
+  GstElement *videoSrc = gst_element_factory_make ("videotestsrc", "src");
   GstElement *encoder = gst_element_factory_make ("theoraenc", NULL);
   GstElement *payloader = gst_element_factory_make ("rtptheorapay", NULL);
   GstCaps *videoCaps;
@@ -160,6 +209,11 @@ make_video_session (guint sessionNum)
 
   session = session_new (sessionNum);
   session->input = GST_ELEMENT (videoBin);
+
+#ifdef G_OS_UNIX
+  session->watch_id =
+      g_unix_signal_add (SIGINT, (GSourceFunc) send_eos, session);
+#endif
 
   return session;
 }
@@ -250,8 +304,6 @@ add_stream (GstPipeline * pipe, GstElement * rtpBin, SessionData * session)
 
   g_print ("New RTP stream on %i/%i/%i\n", basePort, basePort + 1,
       basePort + 5);
-
-  session_unref (session);
 }
 
 int
@@ -262,7 +314,6 @@ main (int argc, char **argv)
   SessionData *videoSession;
   SessionData *audioSession;
   GstElement *rtpBin;
-  GMainLoop *loop;
 
   gst_init (&argc, &argv);
 
@@ -271,6 +322,7 @@ main (int argc, char **argv)
   pipe = GST_PIPELINE (gst_pipeline_new (NULL));
   bus = gst_element_get_bus (GST_ELEMENT (pipe));
   g_signal_connect (bus, "message::state-changed", G_CALLBACK (cb_state), pipe);
+  g_signal_connect (bus, "message::eos", G_CALLBACK (cb_eos), NULL);
   gst_bus_add_signal_watch (bus);
   gst_object_unref (bus);
 
@@ -289,10 +341,14 @@ main (int argc, char **argv)
 
   g_main_loop_run (loop);
 
+  session_unref (videoSession);
+  session_unref (audioSession);
+
   g_print ("stopping server pipeline\n");
   gst_element_set_state (GST_ELEMENT (pipe), GST_STATE_NULL);
 
   gst_object_unref (pipe);
+  while (g_main_context_iteration (NULL, FALSE));
   g_main_loop_unref (loop);
 
   return 0;
