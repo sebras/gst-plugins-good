@@ -34,7 +34,7 @@
  *  '-------'    '-------'    '-------'      |            |       '-------'
  *                                           |            |     
  *  .-------.    .---------.    .---------.  |            |       .-------.
- *  |audiots|    |theoraenc|    |theorapay|  |            |       |udpsink|
+ *  |videots|    |theoraenc|    |theorapay|  |            |       |udpsink|
  *  |      src->sink      src->sink  src->send_rtp_1 send_rtp_1->sink     |
  *  '-------'    '---------'    '---------'  |            |       '-------'
  *                                           |            |
@@ -112,6 +112,7 @@ setup_ghost (GstElement * src, GstBin * bin)
   GstPad *srcPad = gst_element_get_static_pad (src, "src");
   GstPad *binPad = gst_ghost_pad_new ("src", srcPad);
   gst_element_add_pad (GST_ELEMENT (bin), binPad);
+  gst_object_unref (srcPad);
 }
 
 static SessionData *
@@ -152,6 +153,7 @@ make_video_session (guint sessionNum)
       "width", G_TYPE_INT, 352,
       "height", G_TYPE_INT, 288, "framerate", GST_TYPE_FRACTION, 15, 1, NULL);
   gst_element_link_filtered (videoSrc, encoder, videoCaps);
+  gst_caps_unref (videoCaps);
   gst_element_link (encoder, payloader);
 
   setup_ghost (payloader, videoBin);

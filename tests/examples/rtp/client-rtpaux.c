@@ -61,6 +61,8 @@
  */
 
 GMainLoop *loop = NULL;
+gulong handler_1;
+gulong handler_2;
 
 typedef struct _SessionData
 {
@@ -103,6 +105,7 @@ setup_ghost_sink (GstElement * sink, GstBin * bin)
   GstPad *sinkPad = gst_element_get_static_pad (sink, "sink");
   GstPad *binPad = gst_ghost_pad_new ("sink", sinkPad);
   gst_element_add_pad (GST_ELEMENT (bin), binPad);
+  gst_object_unref (sinkPad);
 }
 
 static SessionData *
@@ -166,7 +169,9 @@ request_pt_map (GstElement * rtpbin, guint session, guint pt,
   g_print ("Looking for caps for pt %u in session %u, have %u\n", pt, session,
       data->sessionNum);
   if (session == data->sessionNum) {
-    g_print ("Returning %s\n", gst_caps_to_string (data->caps));
+    gchar *caps = gst_caps_to_string (data->caps);
+    g_print ("Returning %s\n", caps);
+    g_free (caps);
     return gst_caps_ref (data->caps);
   }
   return NULL;
@@ -308,11 +313,13 @@ join_session (GstElement * pipeline, GstElement * rtpBin, SessionData * session)
 
   gst_bin_add_many (GST_BIN (pipeline), rtpSrc, rtcpSrc, rtcpSink, NULL);
 
-  g_signal_connect_data (rtpBin, "pad-added", G_CALLBACK (handle_new_stream),
-      session_ref (session), (GClosureNotify) session_unref, 0);
+  handler_1 = g_signal_connect_data (rtpBin, "pad-added",
+      G_CALLBACK (handle_new_stream), session_ref (session),
+      (GClosureNotify) session_unref, 0);
 
-  g_signal_connect_data (rtpBin, "request-pt-map", G_CALLBACK (request_pt_map),
-      session_ref (session), (GClosureNotify) session_unref, 0);
+  handler_2 = g_signal_connect_data (rtpBin, "request-pt-map",
+      G_CALLBACK (request_pt_map), session_ref (session),
+      (GClosureNotify) session_unref, 0);
 
   padName = g_strdup_printf ("recv_rtp_sink_%u", session->sessionNum);
   gst_element_link_pads (rtpSrc, "src", rtpBin, padName);
@@ -369,6 +376,9 @@ main (int argc, char **argv)
 
   g_print ("stoping client pipeline\n");
   gst_element_set_state (GST_ELEMENT (pipe), GST_STATE_NULL);
+
+  g_signal_handler_disconnect (rtpBin, handler_1);
+  g_signal_handler_disconnect (rtpBin, handler_2);
 
   gst_object_unref (pipe);
   g_main_loop_unref (loop);
